@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UCM 全景即時實驗室</title>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+    input[type=range] {
+      accent-color: #3b82f6;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+  
+html, body { background: #020617; color: #f1f5f9; }
+:root { color-scheme: dark; }
+.gutter { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.hdr { top: env(safe-area-inset-top, 0px); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 40; background: #0f172a; }
+body { overflow-x: hidden; }
+#threeCanvas, #glCanvas { display: block; }
+</style>
+</head>
+<body>
+<div class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans select-none">
+
+
+  <!-- TOP HEADER & DEMO PRESETS -->
+  <header class="border-b border-slate-800 bg-slate-900/95 sticky hdr z-30 gutter py-2.5 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center font-bold text-white shadow-md shadow-blue-500/20 text-sm">
+        UCM
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="text-sm md:text-base font-bold text-white tracking-wide">UCM 統一相機模型 & 全景即時實驗室</h1>
+          <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+            即時運算
+          </span>
+        </div>
+        <p class="text-xs text-slate-400">3D 單位球射線投影 ⇄ 2D 感測器 GPU 即時重投影展示</p>
+      </div>
+    </div>
+
+    <!-- Quick Demo Showcase Buttons -->
+    <div class="flex items-center gap-1.5 bg-slate-950/80 p-1 rounded-xl border border-slate-800 text-xs overflow-x-auto">
+      <span class="text-slate-400 text-[11px] px-2 font-medium">快速 DEMO:</span>
+      <button data-demo="pinhole" class="demo-btn px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition font-medium">
+        1. 針孔 (ξ=0)
+      </button>
+      <button data-demo="fisheye" class="demo-btn px-2.5 py-1 rounded-lg bg-blue-600 text-white transition font-medium">
+        2. 魚眼 (ξ=0.72)
+      </button>
+      <button data-demo="stereographic" class="demo-btn px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition font-medium">
+        3. 拋物面/立體 (ξ=1.0)
+      </button>
+      <button data-demo="catadioptric" class="demo-btn px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition font-medium">
+        4. 雙曲折反射 (ξ=1.45)
+      </button>
+      <button data-demo="unwarp" class="demo-btn px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition font-medium">
+        5. 展開為全景 (ERP)
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN CONTAINER -->
+  <main class="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-4 max-w-[1920px] mx-auto w-full gutter py-4">
+
+    <!-- LEFT & CENTER: Visualizations -->
+    <section class="xl:col-span-8 flex flex-col gap-4">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 min-h-[460px]">
+
+        <!-- View 1: 3D Ray & Unit Sphere Geometry (Three.js) -->
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden flex flex-col">
+          <div class="px-4 py-2.5 bg-slate-800/80 border-b border-slate-800 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-cyan-400"></span>
+              <h2 class="text-xs font-semibold text-slate-200">視圖一：UCM 單位球光路幾何 (3D 空間視角)</h2>
+            </div>
+            <div class="flex items-center gap-2 text-[11px] text-slate-400">
+              <button id="resetCam3d" class="hover:text-blue-400 transition" title="重置3D視角">
+                ↺ 重置視角
+              </button>
+              <span>可滑鼠旋轉 / 滾輪縮放</span>
+            </div>
+          </div>
+
+          <div class="relative flex-1 bg-slate-950 min-h-[350px]">
+            <canvas id="threeCanvas" class="w-full h-full block cursor-grab active:cursor-grabbing"></canvas>
+            
+            <!-- 3D Overlay Annotations -->
+            <div class="absolute bottom-3 left-3 bg-slate-900/90 border border-slate-700/60 p-2.5 rounded-xl text-xs space-y-1 shadow-lg pointer-events-none">
+              <div class="flex items-center gap-2">
+                <span class="inline-block w-3 h-0.5 bg-emerald-400"></span>
+                <span class="text-slate-300">空間光束 X → Xₛ</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="inline-block w-3 h-0.5 bg-cyan-400"></span>
+                <span class="text-slate-300">單位球面 S² (‖Xₛ‖ = 1)</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="inline-block w-3 h-0.5 bg-amber-400"></span>
+                <span class="text-slate-200 font-bold">虛擬投影中心 Cₚ = (0, 0, −ξ)</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="inline-block w-3 h-0.5 bg-rose-400"></span>
+                <span class="text-slate-300">正規化投影平面 Z = 1</span>
+              </div>
+            </div>
+
+            <div class="absolute top-3 right-3 bg-slate-900/90 border border-slate-800 rounded-lg px-2.5 py-1.5 text-right mono text-[11px]">
+              <span class="text-slate-400 block text-[10px]">有效視場角 (FOV)</span>
+              <span id="fovAngleBadge" class="text-cyan-400 font-bold text-sm">~ 185.0°</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- View 2: Image Remapping View (GPU Shader) -->
+        <div class="bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden flex flex-col">
+          <div class="px-4 py-2 bg-slate-800/80 border-b border-slate-800 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-blue-500"></span>
+              <h2 class="text-xs font-semibold text-slate-200">視圖二：即時影像重採樣效果 (Pixel Remap)</h2>
+            </div>
+            
+            <!-- Output Mode Tabs -->
+            <div class="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-xs">
+              <button data-mode="0" class="mode-tab active px-2.5 py-0.5 rounded bg-blue-600 text-white font-medium transition">魚眼 UCM</button>
+              <button data-mode="1" class="mode-tab px-2.5 py-0.5 rounded text-slate-400 hover:text-white transition">展平全景 (ERP)</button>
+              <button data-mode="2" class="mode-tab px-2.5 py-0.5 rounded text-slate-400 hover:text-white transition">透視展開</button>
+            </div>
+          </div>
+
+          <div class="relative flex-1 bg-black flex items-center justify-center min-h-[350px] overflow-hidden">
+            <canvas id="glCanvas" class="w-full h-full object-contain"></canvas>
+
+            <!-- Mode Banner -->
+            <div class="absolute top-3 left-3 bg-slate-900/85 backdrop-blur px-2.5 py-1.5 rounded-lg border border-slate-700/60 text-xs mono">
+              <div class="text-slate-400 text-[10px]">當前渲染模式</div>
+              <div id="currentModeLabel" class="text-blue-400 font-bold">魚眼 UCM 畸變採樣</div>
+            </div>
+
+            <!-- Virtual Camera Hint -->
+            <div id="virtualCamHint" class="hidden absolute bottom-3 right-3 bg-slate-900/90 px-3 py-1.5 rounded-lg border border-amber-500/40 text-amber-300 text-xs shadow">
+              <span>滑鼠按住拖曳可旋轉 360° 視角</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Realtime Formula & Mathematics Section -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 text-xs">
+        <div class="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
+          <span class="font-bold text-slate-200">即時數學映射公式 (Mathematical Mapping)</span>
+          <span id="mathBadge" class="text-blue-400 mono text-[11px] bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
+            ξ = 0.72 (折反射/超廣角魚眼)
+          </span>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+            <div class="text-blue-400 font-bold text-xs mb-1">1. 單位球面投影</div>
+            <div class="mono text-slate-200 bg-slate-900 px-2 py-1 rounded text-[11px] mb-1">
+              d = √(X² + Y² + Z²)<br>
+              Xₛ = (X/d, Y/d, Z/d)ᵀ
+            </div>
+            <p class="text-slate-400 text-[11px]">將 3D 光束射線投射至半徑為 1 的單位球面。</p>
+          </div>
+
+          <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+            <div class="text-emerald-400 font-bold text-xs mb-1">2. 虛擬中心投影 (UCM 核心)</div>
+            <div id="formulaCpDisplay" class="mono text-slate-200 bg-slate-900 px-2 py-1 rounded text-[11px] mb-1">
+              m = ( Xₛ/(Zₛ + 0.72), Yₛ/(Zₛ + 0.72), 1 )ᵀ
+            </div>
+            <p id="formulaCpDesc" class="text-slate-400 text-[11px]">
+              從虛擬點 Cₚ = (0, 0, −ξ) 射出射線穿透球點，交於平面 Z = 1。
+            </p>
+          </div>
+
+          <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+            <div class="text-amber-400 font-bold text-xs mb-1">3. 感測器像素座標</div>
+            <div class="mono text-slate-200 bg-slate-900 px-2 py-1 rounded text-[11px] mb-1">
+              u = fₓ · xₘ + cₓ<br>
+              v = f_y · yₘ + c_y
+            </div>
+            <p class="text-slate-400 text-[11px]">相機內參矩陣 K 映射至感測器像素座標。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT: Control Parameter Sidebar -->
+    <aside class="xl:col-span-4 bg-slate-900 rounded-2xl border border-slate-800 shadow-xl p-5 flex flex-col gap-4 custom-scrollbar overflow-y-auto max-h-[calc(100vh-80px)]">
+      
+      <!-- Section 1: UCM Parameters -->
+      <div>
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
+          <h3 class="text-xs font-bold text-white uppercase tracking-wider">UCM 光學內參與畸變</h3>
+          <span class="text-[11px] text-blue-400 mono">Parameters</span>
+        </div>
+
+        <!-- Slider: Xi -->
+        <div class="mb-4 bg-slate-950 p-3 rounded-xl border border-slate-800">
+          <div class="flex justify-between items-center text-xs mb-1.5">
+            <label for="xiRange" class="font-bold text-slate-200">
+              畸變偏置參數 (ξ, Xi)
+            </label>
+            <span id="xiVal" class="mono text-cyan-400 font-bold text-sm bg-slate-800 px-2 py-0.5 rounded border border-slate-700">0.72</span>
+          </div>
+          <input type="range" id="xiRange" min="0.0" max="1.8" step="0.01" value="0.72" class="w-full h-2 bg-slate-800 rounded-lg cursor-pointer">
+          <div class="flex justify-between text-[10px] text-slate-500 mt-1 mono">
+            <span>0.0 (針孔)</span>
+            <span>0.72 (魚眼)</span>
+            <span>1.0 (拋物面)</span>
+            <span>1.8 (雙曲面)</span>
+          </div>
+        </div>
+
+        <!-- Slider: fx, fy -->
+        <div class="grid grid-cols-2 gap-3 mb-3">
+          <div>
+            <div class="flex justify-between items-center text-xs mb-1">
+              <label for="fxRange" class="text-slate-300">焦距 (fₓ)</label>
+              <span id="fxVal" class="mono text-blue-400 text-xs">280</span>
+            </div>
+            <input type="range" id="fxRange" min="100" max="550" step="5" value="280" class="w-full h-2 bg-slate-800 rounded-lg cursor-pointer">
+          </div>
+          <div>
+            <div class="flex justify-between items-center text-xs mb-1">
+              <label for="fyRange" class="text-slate-300">焦距 (f_y)</label>
+              <span id="fyVal" class="mono text-blue-400 text-xs">280</span>
+            </div>
+            <input type="range" id="fyRange" min="100" max="550" step="5" value="280" class="w-full h-2 bg-slate-800 rounded-lg cursor-pointer">
+          </div>
+        </div>
+
+        <!-- Slider: cx, cy -->
+        <div class="grid grid-cols-2 gap-3 mb-2">
+          <div>
+            <div class="flex justify-between items-center text-xs mb-1">
+              <label for="cxRange" class="text-slate-300">主點 (cₓ)</label>
+              <span id="cxVal" class="mono text-blue-400 text-xs">0</span>
+            </div>
+            <input type="range" id="cxRange" min="-80" max="80" step="1" value="0" class="w-full h-2 bg-slate-800 rounded-lg cursor-pointer">
+          </div>
+          <div>
+            <div class="flex justify-between items-center text-xs mb-1">
+              <label for="cyRange" class="text-slate-300">主點 (c_y)</label>
+              <span id="cyVal" class="mono text-blue-400 text-xs">0</span>
+            </div>
+            <input type="range" id="cyRange" min="-80" max="80" step="1" value="0" class="w-full h-2 bg-slate-800 rounded-lg cursor-pointer">
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 2: Virtual Perspective Camera Controls -->
+      <div id="virtualCamControls" class="border-t border-slate-800 pt-3">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
+          <h3 class="text-xs font-bold text-white uppercase tracking-wider">透視針孔展開視角 (Pan / Tilt / FOV)</h3>
+          <span class="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">模式 3</span>
+        </div>
+
+        <div class="space-y-3">
+          <div>
+            <div class="flex justify-between items-center text-xs mb-1">
+              <label class="text-slate-300">水平環視 (Yaw)</label>
+              <span id="yawVal" class="mono text-emerald-400 text-xs">0°</span>
+            </div>
+            <input type="range" id="yawRange" min="-180" max="180" step="1" value="0" class="w-full h-2 bg-slate-800 rounded-lg cursor-pointer">
+          </div>
+
+          <div>
+            <div class="flex justify-between items-center text-xs mb-1">
+              <label class="text-slate-300">垂直俯仰 (Pitch)</label>
+              <span id="pitchVal" class="mono text-emerald-400 text-xs">0°</span>
+            </div>
+            <input type="range" id="pitchRange" min="-80" max="80" step="1" value="0" class="w-full h-2 bg-slate-800 rounded-lg cursor-pointer">
+          </div>
+
+          <div>
+            <div class="flex justify-between items-center text-xs mb-1">
+              <label class="text-slate-300">展開視野 (FOV)</label>
+              <span id="vFovVal" class="mono text-emerald-400 text-xs">75°</span>
+            </div>
+            <input type="range" id="vFovRange" min="30" max="110" step="1" value="75" class="w-full h-2 bg-slate-800 rounded-lg cursor-pointer">
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 3: Pattern Selection -->
+      <div class="border-t border-slate-800 pt-3">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-3">
+          <h3 class="text-xs font-bold text-white uppercase tracking-wider">測試環境紋理</h3>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2 mb-3">
+          <button data-pattern="grid" class="pattern-btn active text-xs py-2 px-1 rounded-xl bg-purple-600/30 border border-purple-500/50 text-white font-medium hover:bg-purple-600/40 transition text-center">
+            經緯度標記網格
+          </button>
+          <button data-pattern="checker" class="pattern-btn text-xs py-2 px-1 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 font-medium hover:bg-slate-700 transition text-center">
+            幾何標定棋盤格
+          </button>
+          <button data-pattern="interior" class="pattern-btn text-xs py-2 px-1 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 font-medium hover:bg-slate-700 transition text-center">
+            室內全景房間
+          </button>
+        </div>
+
+        <label class="flex items-center justify-center gap-2 w-full p-2.5 rounded-xl border border-dashed border-slate-700 bg-slate-800/40 hover:bg-slate-800 hover:border-slate-500 text-slate-400 hover:text-slate-200 cursor-pointer text-xs transition">
+          <span id="uploadLabel">📁 上傳本機全景圖 / 魚眼相片...</span>
+          <input type="file" id="imageUpload" accept="image/*" class="hidden">
+        </label>
+      </div>
+
+      <!-- Diagnostics -->
+      <div class="border-t border-slate-800 pt-3 bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs">
+        <h4 class="font-semibold text-slate-200 mb-2">光學理論特性診斷</h4>
+        <div class="space-y-1 text-slate-400 text-[11px]">
+          <div class="flex justify-between">
+            <span>鏡頭分類:</span>
+            <span id="diagType" class="font-medium text-cyan-400">折反射 / 廣角魚眼</span>
+          </div>
+          <div class="flex justify-between">
+            <span>最大幾何 FOV:</span>
+            <span id="diagFov" class="mono text-slate-200">185.0°</span>
+          </div>
+          <div class="flex justify-between">
+            <span>反投影閉式解 (Inverse):</span>
+            <span class="text-emerald-400 font-medium">支援解析封閉解</span>
+          </div>
+        </div>
+      </div>
+
+    </aside>
+  </main>
+
+  <!-- SCRIPT LOGIC -->
+  <script>
+    const state = {
+      xi: 0.72,
+      fx: 280.0,
+      fy: 280.0,
+      cx: 0.0,
+      cy: 0.0,
+      mode: 0, // 0: Fisheye, 1: ERP, 2: Rectilinear
+      pattern: 'grid',
+      yaw: 0.0,
+      pitch: 0.0,
+      vfov: 75.0,
+    };
+
+    // -------------------------------------------------------------
+    // THREE.JS 3D SCENE SETUP
+    // -------------------------------------------------------------
+    let scene, camera, renderer, controls;
+    let unitSphereMesh, planeMesh, centerPointMesh, rayLinesGroup;
+    const threeCanvas = document.getElementById('threeCanvas');
+
+    function initThreeScene() {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x020617);
+
+      const width = threeCanvas.parentElement.clientWidth;
+      const height = threeCanvas.parentElement.clientHeight || 350;
+
+      camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+      camera.position.set(2.8, 1.8, 3.2);
+
+      renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, antialias: true });
+      renderer.setSize(width, height);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+
+      const axesHelper = new THREE.AxesHelper(1.8);
+      scene.add(axesHelper);
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      dirLight.position.set(5, 10, 7);
+      scene.add(dirLight);
+
+      // Unit Sphere (Radius = 1.0)
+      const sphereGeo = new THREE.SphereGeometry(1.0, 32, 24);
+      const sphereMat = new THREE.MeshStandardMaterial({
+        color: 0x06b6d4,
+        transparent: true,
+        opacity: 0.25,
+        wireframe: true,
+        roughness: 0.3
+      });
+      unitSphereMesh = new THREE.Mesh(sphereGeo, sphereMat);
+      scene.add(unitSphereMesh);
+
+      // Inner sphere highlight
+      scene.add(new THREE.Mesh(sphereGeo, new THREE.MeshBasicMaterial({
+        color: 0x0891b2,
+        transparent: true,
+        opacity: 0.08
+      })));
+
+      // Normalized Image Plane at Z = 1
+      const planeGeo = new THREE.PlaneGeometry(2.2, 2.2);
+      const planeMat = new THREE.MeshStandardMaterial({
+        color: 0xf43f5e,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.3,
+        roughness: 0.5
+      });
+      planeMesh = new THREE.Mesh(planeGeo, planeMat);
+      planeMesh.position.set(0, 0, 1);
+      scene.add(planeMesh);
+
+      const planeEdges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(planeGeo),
+        new THREE.LineBasicMaterial({ color: 0xfb7185, linewidth: 2 })
+      );
+      planeMesh.add(planeEdges);
+
+      // Virtual Projection Center Cp = (0, 0, -xi)
+      const pointGeo = new THREE.SphereGeometry(0.05, 16, 16);
+      const pointMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+      centerPointMesh = new THREE.Mesh(pointGeo, pointMat);
+      scene.add(centerPointMesh);
+
+      // Center (0,0,0)
+      scene.add(new THREE.Mesh(
+        new THREE.SphereGeometry(0.04, 16, 16),
+        new THREE.MeshBasicMaterial({ color: 0x10b981 })
+      ));
+
+      // Rays group
+      rayLinesGroup = new THREE.Group();
+      scene.add(rayLinesGroup);
+
+      updateThreeElements();
+    }
+
+    function updateThreeElements() {
+      if (!centerPointMesh) return;
+      centerPointMesh.position.set(0, 0, -state.xi);
+
+      while (rayLinesGroup.children.length > 0) {
+        const obj = rayLinesGroup.children[0];
+        rayLinesGroup.remove(obj);
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) obj.material.dispose();
+      }
+
+      const sampleAngles = [-70, -45, -20, 0, 20, 45, 70];
+      const lineMatSphere = new THREE.LineBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.85 });
+      const lineMatProj = new THREE.LineBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.9 });
+      const hitPointGeo = new THREE.SphereGeometry(0.03, 8, 8);
+      const hitMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+      const planeHitMat = new THREE.MeshBasicMaterial({ color: 0xf43f5e });
+
+      sampleAngles.forEach(deg => {
+        const rad = (deg * Math.PI) / 180;
+        const sx = Math.sin(rad);
+        const sy = 0;
+        const sz = Math.cos(rad);
+
+        // Ray to sphere
+        const worldLength = 2.2;
+        const ptsWorld = [
+          new THREE.Vector3(sx * worldLength, 0, sz * worldLength),
+          new THREE.Vector3(sx, 0, sz)
+        ];
+        const geoW = new THREE.BufferGeometry().setFromPoints(ptsWorld);
+        rayLinesGroup.add(new THREE.Line(geoW, lineMatSphere));
+
+        const sPoint = new THREE.Mesh(hitPointGeo, hitMat);
+        sPoint.position.set(sx, sy, sz);
+        rayLinesGroup.add(sPoint);
+
+        // Projection from Cp to plane Z = 1
+        const cp = new THREE.Vector3(0, 0, -state.xi);
+        const denom = sz + state.xi;
+        if (denom > 0.001) {
+          const u_norm = sx / denom;
+          const v_norm = sy / denom;
+          const planePt = new THREE.Vector3(u_norm, v_norm, 1.0);
+
+          const ptsProj = [cp, planePt];
+          const geoP = new THREE.BufferGeometry().setFromPoints(ptsProj);
+          rayLinesGroup.add(new THREE.Line(geoP, lineMatProj));
+
+          const pPoint = new THREE.Mesh(hitPointGeo, planeHitMat);
+          pPoint.position.copy(planePt);
+          rayLinesGroup.add(pPoint);
+        }
+      });
+    }
+
+    // -------------------------------------------------------------
+    // REALTIME WEBGL SHADER
+    // -------------------------------------------------------------
+    const glCanvas = document.getElementById('glCanvas');
+    let gl, shaderProgram, positionBuffer;
+    let uLocs = {};
+    let activeWebGlTexture = null;
+
+    const vsSource = `
+      attribute vec2 aPosition;
+      varying vec2 vUv;
+      void main() {
+        vUv = (aPosition + 1.0) * 0.5;
+        gl_Position = vec4(aPosition, 0.0, 1.0);
+      }
+    `;
+
+    const fsSource = `
+      precision highp float;
+      varying vec2 vUv;
+      uniform sampler2D uTexture;
+      uniform int uMode; // 0: Fisheye, 1: ERP, 2: Rectilinear
+      uniform float uXi;
+      uniform vec2 uFocal;
+      uniform vec2 uCenter;
+      uniform vec2 uResolution;
+      uniform vec2 uAngles;
+      uniform float uVfov;
+
+      const float PI = 3.14159265358979323846;
+
+      vec3 rotateRay(vec3 ray, vec2 angles) {
+        float p = angles.y;
+        float y = angles.x;
+        mat3 rotX = mat3(
+          1.0, 0.0, 0.0,
+          0.0, cos(p), -sin(p),
+          0.0, sin(p), cos(p)
+        );
+        mat3 rotY = mat3(
+          cos(y), 0.0, sin(y),
+          0.0, 1.0, 0.0,
+          -sin(y), 0.0, cos(y)
+        );
+        return rotY * (rotX * ray);
+      }
+
+      vec2 rayToEquirectangular(vec3 dir) {
+        float phi = asin(clamp(dir.y, -1.0, 1.0));
+        float theta = atan(dir.x, dir.z);
+        float u = 0.5 + theta / (2.0 * PI);
+        float v = 0.5 + phi / PI;
+        return vec2(u, v);
+      }
+
+      void main() {
+        vec3 ray = vec3(0.0);
+        bool valid = true;
+
+        if (uMode == 0) {
+          // MODE 0: Fisheye UCM Sensor View
+          vec2 p = (gl_FragCoord.xy - (uResolution * 0.5 + uCenter)) / uFocal;
+          float r2 = dot(p, p);
+          
+          float term = 1.0 + (1.0 - uXi * uXi) * r2;
+          if (term < 0.0) {
+            valid = false;
+          } else {
+            float gamma = (uXi + sqrt(term)) / (1.0 + r2);
+            ray = vec3(gamma * p.x, -gamma * p.y, gamma - uXi);
+            ray = normalize(ray);
+          }
+        } 
+        else if (uMode == 1) {
+          // MODE 1: Equirectangular Panorama
+          float theta = (vUv.x - 0.5) * 2.0 * PI;
+          float phi = (vUv.y - 0.5) * PI;
+          ray = vec3(cos(phi) * sin(theta), -sin(phi), cos(phi) * cos(theta));
+        } 
+        else if (uMode == 2) {
+          // MODE 2: Virtual Rectilinear Pinhole View
+          vec2 norm = (vUv - 0.5) * 2.0;
+          float aspect = uResolution.x / uResolution.y;
+          float fovRad = uVfov * (PI / 180.0);
+          float halfH = tan(fovRad * 0.5);
+          float halfW = halfH * aspect;
+
+          vec3 localRay = normalize(vec3(norm.x * halfW, -norm.y * halfH, 1.0));
+          ray = rotateRay(localRay, uAngles);
+        }
+
+        if (!valid) {
+          gl_FragColor = vec4(0.03, 0.05, 0.09, 1.0);
+          return;
+        }
+
+        vec2 sampleUv = rayToEquirectangular(ray);
+        vec4 col = texture2D(uTexture, sampleUv);
+
+        if (uMode == 0) {
+          vec2 centerCoord = gl_FragCoord.xy - (uResolution * 0.5 + uCenter);
+          float radius = length(centerCoord);
+          float maxRadius = min(uResolution.x, uResolution.y) * 0.48;
+          if (radius > maxRadius) {
+            col = mix(col, vec4(0.02, 0.04, 0.07, 1.0), smoothstep(maxRadius, maxRadius + 3.0, radius));
+          }
+        }
+
+        gl_FragColor = col;
+      }
+    `;
+
+    function initWebGL() {
+      gl = glCanvas.getContext('webgl');
+      if (!gl) return;
+
+      function createShader(gl, type, source) {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, source);
+        gl.compileShader(s);
+        return s;
+      }
+
+      const vertShader = createShader(gl, gl.VERTEX_SHADER, vsSource);
+      const fragShader = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+      shaderProgram = gl.createProgram();
+      gl.attachShader(shaderProgram, vertShader);
+      gl.attachShader(shaderProgram, fragShader);
+      gl.linkProgram(shaderProgram);
+
+      positionBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        -1.0, -1.0,  1.0, -1.0, -1.0,  1.0,
+        -1.0,  1.0,  1.0, -1.0,  1.0,  1.0,
+      ]), gl.STATIC_DRAW);
+
+      uLocs = {
+        pos: gl.getAttribLocation(shaderProgram, 'aPosition'),
+        tex: gl.getUniformLocation(shaderProgram, 'uTexture'),
+        mode: gl.getUniformLocation(shaderProgram, 'uMode'),
+        xi: gl.getUniformLocation(shaderProgram, 'uXi'),
+        focal: gl.getUniformLocation(shaderProgram, 'uFocal'),
+        center: gl.getUniformLocation(shaderProgram, 'uCenter'),
+        resolution: gl.getUniformLocation(shaderProgram, 'uResolution'),
+        angles: gl.getUniformLocation(shaderProgram, 'uAngles'),
+        vfov: gl.getUniformLocation(shaderProgram, 'uVfov'),
+      };
+
+      generateProceduralTexture();
+    }
+
+    function generateProceduralTexture() {
+      const texWidth = 1024;
+      const texHeight = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = texWidth;
+      canvas.height = texHeight;
+      const ctx = canvas.getContext('2d');
+
+      if (state.pattern === 'grid') {
+        ctx.fillStyle = '#090d16';
+        ctx.fillRect(0, 0, texWidth, texHeight);
+
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#1e293b';
+        for (let x = 0; x <= texWidth; x += 32) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, texHeight);
+          ctx.stroke();
+        }
+        for (let y = 0; y <= texHeight; y += 32) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(texWidth, y);
+          ctx.stroke();
+        }
+
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(0, texHeight / 2);
+        ctx.lineTo(texWidth, texHeight / 2);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#6366f1';
+        ctx.beginPath();
+        ctx.moveTo(texWidth / 2, 0);
+        ctx.lineTo(texWidth / 2, texHeight);
+        ctx.stroke();
+
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = 'bold 20px monospace';
+        ctx.fillText('0° (正面)', texWidth / 2 + 10, texHeight / 2 - 15);
+        ctx.fillText('+90° (右側)', (texWidth * 3) / 4 + 10, texHeight / 2 - 15);
+        ctx.fillText('-90° (左側)', texWidth / 4 + 10, texHeight / 2 - 15);
+        ctx.fillText('±180° (背面)', 20, texHeight / 2 - 15);
+
+        const colors = ['#f43f5e', '#10b981', '#f59e0b', '#a855f7'];
+        for (let i = 1; i <= 3; i++) {
+          ctx.strokeStyle = colors[i % colors.length];
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(texWidth / 2, texHeight / 2, i * 65, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      } else if (state.pattern === 'checker') {
+        const numCols = 32;
+        const numRows = 16;
+        const cellW = texWidth / numCols;
+        const cellH = texHeight / numRows;
+
+        for (let r = 0; r < numRows; r++) {
+          for (let c = 0; c < numCols; c++) {
+            ctx.fillStyle = (r + c) % 2 === 0 ? '#1e293b' : '#f8fafc';
+            ctx.fillRect(c * cellW, r * cellH, cellW, cellH);
+          }
+        }
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(texWidth / 2, 0);
+        ctx.lineTo(texWidth / 2, texHeight);
+        ctx.moveTo(0, texHeight / 2);
+        ctx.lineTo(texWidth, texHeight / 2);
+        ctx.stroke();
+      } else if (state.pattern === 'interior') {
+        const grad = ctx.createLinearGradient(0, 0, 0, texHeight);
+        grad.addColorStop(0, '#1e1b4b');
+        grad.addColorStop(0.5, '#312e81');
+        grad.addColorStop(1, '#020617');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, texWidth, texHeight);
+
+        ctx.strokeStyle = '#475569';
+        ctx.lineWidth = 2;
+        for (let i = 0; i <= texWidth; i += 64) {
+          ctx.beginPath();
+          ctx.moveTo(i, texHeight / 2);
+          ctx.lineTo(i * 1.3 - texWidth * 0.15, texHeight);
+          ctx.stroke();
+        }
+
+        for (let w = 0; w < 4; w++) {
+          const wx = 120 + w * 240;
+          ctx.fillStyle = '#60a5fa';
+          ctx.fillRect(wx, texHeight / 2 - 90, 80, 140);
+          ctx.strokeStyle = '#93c5fd';
+          ctx.lineWidth = 4;
+          ctx.strokeRect(wx, texHeight / 2 - 90, 80, 140);
+        }
+      }
+
+      uploadCanvasToWebGL(canvas);
+    }
+
+    function uploadCanvasToWebGL(source) {
+      if (!gl) return;
+      if (!activeWebGlTexture) activeWebGlTexture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, activeWebGlTexture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    }
+
+    function renderWebGL() {
+      if (!gl || !shaderProgram) return;
+
+      const displayWidth = glCanvas.parentElement.clientWidth;
+      const displayHeight = glCanvas.parentElement.clientHeight || 350;
+
+      if (glCanvas.width !== displayWidth || glCanvas.height !== displayHeight) {
+        glCanvas.width = displayWidth;
+        glCanvas.height = displayHeight;
+        gl.viewport(0, 0, displayWidth, displayHeight);
+      }
+
+      gl.useProgram(shaderProgram);
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.enableVertexAttribArray(uLocs.pos);
+      gl.vertexAttribPointer(uLocs.pos, 2, gl.FLOAT, false, 0, 0);
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, activeWebGlTexture);
+      gl.uniform1i(uLocs.tex, 0);
+
+      gl.uniform1i(uLocs.mode, state.mode);
+      gl.uniform1f(uLocs.xi, state.xi);
+      gl.uniform2f(uLocs.focal, state.fx, state.fy);
+      gl.uniform2f(uLocs.center, state.cx, state.cy);
+      gl.uniform2f(uLocs.resolution, glCanvas.width, glCanvas.height);
+      gl.uniform2f(uLocs.angles, (state.yaw * Math.PI) / 180, (state.pitch * Math.PI) / 180);
+      gl.uniform1f(uLocs.vfov, state.vfov);
+
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      if (renderer && scene && camera) {
+        controls.update();
+        renderer.render(scene, camera);
+      }
+      renderWebGL();
+    }
+
+    function updateDiagnostics() {
+      let maxFovDeg = 360;
+      let lensDesc = '折反射全景鏡頭';
+
+      if (state.xi <= 0.001) {
+        maxFovDeg = 170.0;
+        lensDesc = '理想針孔透視相機 (Pinhole, ξ = 0)';
+      } else if (state.xi < 1.0) {
+        const halfAngle = Math.acos(-Math.min(1.0, state.xi));
+        maxFovDeg = ((halfAngle * 2.0 * 180) / Math.PI).toFixed(1);
+        lensDesc = '超廣角魚眼鏡頭 (Fisheye, 0 < ξ < 1)';
+      } else if (Math.abs(state.xi - 1.0) < 0.02) {
+        maxFovDeg = 360.0;
+        lensDesc = '立體投影 / 拋物面鏡 (Stereographic, ξ = 1)';
+      } else {
+        maxFovDeg = 360.0;
+        lensDesc = '雙曲面折反射全景鏡頭 (Hyperbolic, ξ > 1)';
+      }
+
+      document.getElementById('fovAngleBadge').innerText = `~ ${maxFovDeg > 359 ? '360° 全天球' : maxFovDeg + '°'}`;
+      document.getElementById('diagFov').innerText = maxFovDeg > 359 ? '360° (全天球覆蓋)' : `${maxFovDeg}°`;
+      document.getElementById('diagType').innerText = lensDesc;
+
+      const xiStr = Number(state.xi).toFixed(2);
+      document.getElementById('mathBadge').innerText = `ξ = ${xiStr} (${lensDesc})`;
+      document.getElementById('formulaCpDisplay').innerHTML = `m = ( Xₛ/(Zₛ + ${xiStr}), Yₛ/(Zₛ + ${xiStr}), 1 )ᵀ`;
+      document.getElementById('formulaCpDesc').innerText = `從光軸虛擬點 Cp = (0, 0, -${xiStr}) 穿透球點連線，交於投影平面 Z = 1。`;
+    }
+
+    function syncUIFromState() {
+      document.getElementById('xiRange').value = state.xi;
+      document.getElementById('xiVal').innerText = Number(state.xi).toFixed(2);
+
+      document.getElementById('fxRange').value = state.fx;
+      document.getElementById('fxVal').innerText = state.fx;
+
+      document.getElementById('fyRange').value = state.fy;
+      document.getElementById('fyVal').innerText = state.fy;
+
+      document.getElementById('cxRange').value = state.cx;
+      document.getElementById('cxVal').innerText = state.cx;
+
+      document.getElementById('cyRange').value = state.cy;
+      document.getElementById('cyVal').innerText = state.cy;
+
+      document.getElementById('yawRange').value = state.yaw;
+      document.getElementById('yawVal').innerText = `${state.yaw}°`;
+
+      document.getElementById('pitchRange').value = state.pitch;
+      document.getElementById('pitchVal').innerText = `${state.pitch}°`;
+
+      document.getElementById('vFovRange').value = state.vfov;
+      document.getElementById('vFovVal').innerText = `${state.vfov}°`;
+
+      document.querySelectorAll('.mode-tab').forEach(btn => {
+        const m = parseInt(btn.getAttribute('data-mode'));
+        if (m === state.mode) {
+          btn.classList.add('bg-blue-600', 'text-white');
+          btn.classList.remove('text-slate-400');
+        } else {
+          btn.classList.remove('bg-blue-600', 'text-white');
+          btn.classList.add('text-slate-400');
+        }
+      });
+
+      const modeNames = [
+        '魚眼 UCM 畸變採樣',
+        '等距柱狀全景圖展平 (ERP)',
+        '透視展開虛擬視角 (Rectilinear)'
+      ];
+      document.getElementById('currentModeLabel').innerText = modeNames[state.mode];
+
+      const vCamHint = document.getElementById('virtualCamHint');
+      const vCamControls = document.getElementById('virtualCamControls');
+      if (state.mode === 2) {
+        vCamHint.classList.remove('hidden');
+        vCamControls.classList.remove('opacity-40', 'pointer-events-none');
+      } else {
+        vCamHint.classList.add('hidden');
+        vCamControls.classList.add('opacity-40', 'pointer-events-none');
+      }
+
+      updateThreeElements();
+      updateDiagnostics();
+    }
+
+    function setupDemoActions() {
+      const demoBtns = document.querySelectorAll('.demo-btn');
+      demoBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          demoBtns.forEach(b => {
+            b.classList.remove('bg-blue-600', 'text-white', 'bg-indigo-600');
+            b.classList.add('bg-slate-800', 'text-slate-200');
+          });
+          btn.classList.add('bg-blue-600', 'text-white');
+          btn.classList.remove('bg-slate-800', 'text-slate-200');
+
+          const demoType = btn.getAttribute('data-demo');
+          switch (demoType) {
+            case 'pinhole':
+              state.xi = 0.0;
+              state.fx = 320;
+              state.fy = 320;
+              state.mode = 0;
+              break;
+            case 'fisheye':
+              state.xi = 0.72;
+              state.fx = 280;
+              state.fy = 280;
+              state.mode = 0;
+              break;
+            case 'stereographic':
+              state.xi = 1.0;
+              state.fx = 240;
+              state.fy = 240;
+              state.mode = 0;
+              break;
+            case 'catadioptric':
+              state.xi = 1.45;
+              state.fx = 200;
+              state.fy = 200;
+              state.mode = 0;
+              break;
+            case 'unwarp':
+              state.mode = 1;
+              break;
+          }
+          syncUIFromState();
+        });
+      });
+
+      document.getElementById('resetCam3d').addEventListener('click', () => {
+        camera.position.set(2.8, 1.8, 3.2);
+        controls.target.set(0, 0, 0);
+      });
+    }
+
+    function setupEventListeners() {
+      setupDemoActions();
+
+      document.getElementById('xiRange').addEventListener('input', e => {
+        state.xi = parseFloat(e.target.value);
+        syncUIFromState();
+      });
+
+      document.getElementById('fxRange').addEventListener('input', e => {
+        state.fx = parseFloat(e.target.value);
+        syncUIFromState();
+      });
+
+      document.getElementById('fyRange').addEventListener('input', e => {
+        state.fy = parseFloat(e.target.value);
+        syncUIFromState();
+      });
+
+      document.getElementById('cxRange').addEventListener('input', e => {
+        state.cx = parseFloat(e.target.value);
+        syncUIFromState();
+      });
+
+      document.getElementById('cyRange').addEventListener('input', e => {
+        state.cy = parseFloat(e.target.value);
+        syncUIFromState();
+      });
+
+      document.getElementById('yawRange').addEventListener('input', e => {
+        state.yaw = parseFloat(e.target.value);
+        syncUIFromState();
+      });
+
+      document.getElementById('pitchRange').addEventListener('input', e => {
+        state.pitch = parseFloat(e.target.value);
+        syncUIFromState();
+      });
+
+      document.getElementById('vFovRange').addEventListener('input', e => {
+        state.vfov = parseFloat(e.target.value);
+        syncUIFromState();
+      });
+
+      document.querySelectorAll('.mode-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.mode = parseInt(btn.getAttribute('data-mode'));
+          syncUIFromState();
+        });
+      });
+
+      document.querySelectorAll('.pattern-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.pattern-btn').forEach(b => {
+            b.classList.remove('bg-purple-600/30', 'border-purple-500/50', 'text-white');
+            b.classList.add('bg-slate-800', 'border-slate-700', 'text-slate-300');
+          });
+          btn.classList.add('bg-purple-600/30', 'border-purple-500/50', 'text-white');
+          btn.classList.remove('bg-slate-800', 'border-slate-700', 'text-slate-300');
+
+          state.pattern = btn.getAttribute('data-pattern');
+          generateProceduralTexture();
+        });
+      });
+
+      document.getElementById('imageUpload').addEventListener('change', e => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = ev => {
+          const img = new Image();
+          img.onload = () => {
+            uploadCanvasToWebGL(img);
+            document.getElementById('uploadLabel').innerText = `已載入: ${file.name.slice(0, 14)}...`;
+          };
+          img.src = ev.target.result;
+        };
+        reader.readAsDataURL(file);
+      });
+
+      let isDraggingCam = false;
+      let lastMouseX = 0, lastMouseY = 0;
+
+      glCanvas.addEventListener('mousedown', e => {
+        if (state.mode === 2) {
+          isDraggingCam = true;
+          lastMouseX = e.clientX;
+          lastMouseY = e.clientY;
+        }
+      });
+
+      window.addEventListener('mousemove', e => {
+        if (!isDraggingCam || state.mode !== 2) return;
+        const dx = e.clientX - lastMouseX;
+        const dy = e.clientY - lastMouseY;
+        lastMouseX = e.clientX;
+        lastMouseY = e.clientY;
+
+        state.yaw = (state.yaw - dx * 0.3 + 540) % 360 - 180;
+        state.pitch = Math.max(-80, Math.min(80, state.pitch - dy * 0.3));
+        syncUIFromState();
+      });
+
+      window.addEventListener('mouseup', () => {
+        isDraggingCam = false;
+      });
+
+      window.addEventListener('resize', () => {
+        if (renderer && threeCanvas) {
+          const w = threeCanvas.parentElement.clientWidth;
+          const h = threeCanvas.parentElement.clientHeight || 350;
+          camera.aspect = w / h;
+          camera.updateProjectionMatrix();
+          renderer.setSize(w, h);
+        }
+      });
+    }
+
+    window.onload = function() {
+      initThreeScene();
+      initWebGL();
+      setupEventListeners();
+      syncUIFromState();
+      animate();
+    };
+  </script>
+
+</div>
+</body>
+</html>
